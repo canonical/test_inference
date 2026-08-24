@@ -5,10 +5,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/canonical/test-inference.git"
+    "url": "git+https://github.com/canonical/test_inference.git"
   },
-  "homepage": "https://github.com/canonical/test-inference#readme",
-  "bugs": "https://github.com/canonical/test-inference/issues",
+  "homepage": "https://github.com/canonical/test_inference#readme",
+  "bugs": "https://github.com/canonical/test_inference/issues",
   "type": "module",
   "main": "./dist/client.js",
   "types": "./dist/client.d.ts",

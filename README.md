@@ -421,8 +421,8 @@ public client API, starts the installed `test-inference` executable, and checks 
 ## Publishing
 
 Releases are published as public npm packages by `.github/workflows/publish.yaml`. Before the first
-release, create the `canonical/test-inference` GitHub repository and configure npm trusted publishing
-for package `@athena/test-inference`, repository `canonical/test-inference`, and workflow
+release, configure npm trusted publishing for package `@athena/test-inference`, repository
+`canonical/test_inference`, and workflow
 `publish.yaml`. Then push a `v1.0.0` tag and publish the matching GitHub release. The workflow rejects
 a release whose tag does not match `package.json`, runs all checks and package smoke tests, and
 publishes with npm provenance.
