@@ -1,0 +1,65 @@
+{
+  "name": "@athena/test-inference",
+  "version": "1.0.0",
+  "description": "Deterministic OpenAI-compatible inference service for end-to-end test stacks.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/canonical/test-inference.git"
+  },
+  "homepage": "https://github.com/canonical/test-inference#readme",
+  "bugs": "https://github.com/canonical/test-inference/issues",
+  "type": "module",
+  "main": "./dist/client.js",
+  "types": "./dist/client.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./openapi.yaml": "./openapi.yaml",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "test-inference": "./dist/server.js"
+  },
+  "files": [
+    "dist",
+    "openapi.yaml",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true }); require('node:fs').rmSync('dist-test', { recursive: true, force: true })\"",
+    "build": "npm exec -- tsc --project ./tsconfig.build.json",
+    "postbuild": "node -e \"require('node:fs').chmodSync('dist/server.js', 0o755)\"",
+    "build:test": "npm exec -- tsc --project ./tsconfig.test.json",
+    "check": "npm exec -- tsc --noEmit --project ./tsconfig.test.json",
+    "prepack": "npm run clean && npm run build",
+    "start": "node ./dist/server.js",
+    "test": "npm run build && npm run build:test && node --test ./dist-test/test/*.test.js",
+    "test:package": "node ./scripts/package-smoke.mjs"
+  },
+  "keywords": [
+    "openai",
+    "mock",
+    "inference",
+    "testing",
+    "e2e",
+    "embeddings",
+    "chat-completions"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

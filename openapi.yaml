@@ -1,0 +1,497 @@
+openapi: 3.1.0
+
+info:
+  title: Deterministic inference service
+  version: 1.0.0
+  description: |
+    A model inference backend for Athena's local and CI stacks.
+
+    Two surfaces, deliberately separated:
+
+    - **openai** — the subset of the OpenAI-compatible API that Athena actually calls. Only
+      documented fields are implemented; anything else in a request is ignored rather than
+      rejected.
+    - **control** — scenario registration, used by specs and by nothing else. This is the only
+      state the service holds, and it is scoped so specs running in parallel cannot observe or
+      disturb one another's.
+
+    A response is a pure function of the request plus the scenario registered for its scope.
+    There are no counters, no ordering between requests, and no dependence on a clock — the
+    scenario TTL governs eviction only, never a response body.
+
+    Chat completions have no behavior of their own: an unconfigured scope, or a request no
+    exchange matches, is a `501`. `/v1/models` and `/v1/embeddings` need no scenario, because
+    neither decides anything.
+
+    See `README.md` for matcher semantics and what in Athena calls each endpoint.
+
+servers:
+  - url: http://test-inference:8080
+    description: In-stack, over the compose network. Athena reaches the service here, as it would
+      any provider — a provider baseUrl accepts http as well as https.
+  - url: http://localhost:8099
+    description: The same listener, published on loopback for the Playwright process, which runs
+      on the host and cannot resolve the compose hostname.
+
+tags:
+  - name: openai
+    description: The OpenAI-compatible surface Athena calls.
+  - name: control
+    description: Scenario registration. Specs only.
+  - name: health
+    description: Liveness, used by the compose health check.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: The service is listening.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    const: ok
+
+  /v1/models:
+    get:
+      tags: [openai]
+      summary: List advertised models
+      description: |
+        Athena calls this when a provider is created or edited, to populate and validate
+        `enabledModels`, and again from the `athena_list_models` tool. A service without it
+        cannot be configured through the UI at all, because `ProviderSettings` offers only
+        models this endpoint advertises.
+
+        Model *names* are therefore global. Model *behavior* is not — a spec declares that in
+        its own scenario, keyed on `model`.
+      responses:
+        "200":
+          description: The advertised catalog.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/chat/completions:
+    post:
+      tags: [openai]
+      summary: Create a chat completion
+      description: |
+        Answers from the scenario registered for the request's scope, and from nowhere else.
+        Six call sites in Athena reach this endpoint; see `README.md`.
+
+        Note that Athena's task iterator appends a synthetic `user` message to every request, so
+        `lastMessageRole` is always `user` and `userMessageEquals` sees only that boilerplate.
+        Match a task loop with `messagesContain` and `toolOffered` — see `README.md`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: A completion. `finish_reason` is `tool_calls` when the message carries
+            tool calls, `stop` otherwise.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletion"
+        "400":
+          description: Unknown chat model, or a malformed body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "501":
+          description: |
+            No scenario is registered for the request's scope, or none of its exchanges matched
+            and it declares no `default`. The message names the scope and describes the request
+            that found no match.
+
+            `501` rather than `404` because `providerValidateModels` reads **only 404** as
+            "model unavailable"; and outside `fetchWithRetry`'s retryable set (429/502/503/504),
+            so it surfaces on the first attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: |
+            A provider failure declared through an `error` outcome. Configured failures always
+            use 502; the optional scenario message is returned in the JSON error body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/embeddings:
+    post:
+      tags: [openai]
+      summary: Create embeddings
+      description: |
+        Vectors come from a hashing vectorizer over character windows: one window of three
+        characters starts at every position, each hashed with FNV-1a into a bucket with a signed
+        count, then L2 normalized. Meaningless as semantics, deliberately discriminating —
+        identical text yields an identical vector, overlapping text scores closer than disjoint
+        text, and different text yields a different vector up to hash collision.
+
+        Windows rather than words, so the properties hold for any script and for text made
+        entirely of punctuation or emoji, with no case folding, normalization, or segmentation
+        table that could differ between two machines. Nothing is folded: the vector is a pure
+        function of the exact string. See `README.md`.
+
+        Dimension is read from the model name, so a spec can exercise widths the catalog does
+        not advertise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmbeddingsRequest"
+      responses:
+        "200":
+          description: |
+            Embeddings, with `data` entries returned **deliberately out of order**. Each carries
+            its own `index`; a consumer that trusts array position must fail here rather than
+            pass by luck. This is contract, not an implementation detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingList"
+        "400":
+          description: Unknown embedding model, unsupported dimension, or a malformed `input`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /_mock/scenarios/{scope}:
+    parameters:
+      - name: scope
+        in: path
+        required: true
+        description: |
+          The scope key. This is the value a spec types as its Athena provider's **API key**,
+          which then travels on every request as the bearer — so requests arrive already scoped
+          and parallel specs never share configuration. Must not begin `invalid-`, which the
+          service rejects as its credential-failure sentinel.
+        schema:
+          type: string
+    put:
+      tags: [control]
+      summary: Register or replace a scenario
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Scenario"
+      responses:
+        "200":
+          description: Stored. Scenarios live in memory with a ten-minute TTL, expired lazily
+            on read; nothing persists across a restart and nothing needs to.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scope: { type: string }
+                  stored: { const: true }
+        "400":
+          description: |
+            Invalid scenario, or a `scope` that is not valid percent-encoded text. Unknown
+            matcher or outcome keys are rejected here, with a message naming the valid ones, so a
+            typo in a spec fails loudly instead of silently never matching. So are an outcome key
+            with an empty value and unknown `error` keys such as `status`; configured failures
+            always return `502`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [control]
+      summary: Remove a scenario
+      security: []
+      responses:
+        "200":
+          description: Removed, or already absent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scope: { type: string }
+                  deleted: { const: true }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Any non-empty token is accepted, and the token doubles as the scope key. A token
+        beginning `invalid-` is rejected with 401 — that sentinel exists so the
+        credential-failure path stays reachable from a UI form that requires a non-empty key.
+
+  responses:
+    Unauthorized:
+      description: Missing bearer, or the `invalid-` sentinel.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            type: { const: invalid_request_error }
+
+    Message:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          type: [string, "null"]
+        tool_call_id: { type: string }
+        name: { type: string }
+        tool_calls:
+          type: array
+          items: { $ref: "#/components/schemas/ToolCall" }
+
+    ToolCall:
+      type: object
+      required: [id, type, function]
+      properties:
+        id: { type: string }
+        type: { const: function }
+        function:
+          type: object
+          required: [name, arguments]
+          properties:
+            name: { type: string }
+            arguments:
+              type: string
+              description: JSON-encoded, as the OpenAI wire format requires.
+
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+          description: Must be an advertised chat model; anything else is a 400.
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+        tools:
+          type: array
+          description: |
+            Offered tools, matchable with `toolOffered`. That matcher is how a spec asserts the
+            enablement path — a `toolCall` outcome otherwise fires whether or not the loop
+            offered the tool it names.
+          items:
+            type: object
+            properties:
+              type: { const: function }
+              function:
+                type: object
+                properties:
+                  name: { type: string }
+                  description: { type: string }
+                  parameters: { type: object }
+        temperature:
+          type: number
+          description: Accepted and ignored — responses are deterministic.
+        tool_choice: { type: string }
+        parallel_tool_calls: { type: boolean }
+
+    ChatCompletion:
+      type: object
+      required: [id, object, model, choices]
+      properties:
+        id: { type: string }
+        object: { const: chat.completion }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              finish_reason:
+                type: string
+                enum: [stop, tool_calls]
+              message: { $ref: "#/components/schemas/Message" }
+        usage: { $ref: "#/components/schemas/Usage" }
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+        cost: { type: number }
+
+    ModelList:
+      type: object
+      properties:
+        object: { const: list }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name:
+                type: string
+                description: |
+                  Becomes `displayName`, which `ProviderSettings` renders as the checkbox label —
+                  falling back to the id when no models have been fetched.
+              description: { type: string }
+              context_length: { type: integer }
+              architecture: { type: object }
+              pricing: { type: object }
+
+    EmbeddingsRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model:
+          type: string
+          pattern: '^deterministic-embed-\d+$'
+          description: The trailing number is the vector width, up to 4096.
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+
+    EmbeddingList:
+      type: object
+      properties:
+        object: { const: list }
+        model: { type: string }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object: { const: embedding }
+              index:
+                type: integer
+                description: Authoritative. Entries are returned out of order on purpose.
+              embedding:
+                type: array
+                items: { type: number }
+        usage: { $ref: "#/components/schemas/Usage" }
+
+    Scenario:
+      type: object
+      description: |
+        First matching exchange wins; `default` answers anything matching none. Absent both, the
+        request is a `501` — declare a `default` for requests the spec does not care about.
+      properties:
+        exchanges:
+          type: array
+          items:
+            type: object
+            required: [outcome]
+            properties:
+              when: { $ref: "#/components/schemas/Matcher" }
+              outcome: { $ref: "#/components/schemas/Outcome" }
+        default: { $ref: "#/components/schemas/Outcome" }
+
+    Matcher:
+      type: object
+      additionalProperties: false
+      description: |
+        All optional; every supplied matcher must pass. An absent `when` always matches.
+
+        There is deliberately no call-ordinal matcher: `fetchWithRetry` retries a completion up
+        to four times, so any counter-based scheme would have retries silently consume slots. The
+        conversation is the sequence — the message history grows every turn.
+      properties:
+        model:
+          type: string
+          description: |
+            The only thing distinguishing model-validation requests, which send an identical
+            one-character prompt for every model.
+        lastMessageRole:
+          type: string
+          enum: [user, assistant, tool]
+        userMessageEquals:
+          type: string
+          description: |
+            The most recent user message, matched exactly — case-sensitive and untrimmed.
+
+            Exact on purpose, with no substring form offered. The request it exists for is the
+            probe an application sends to check that a model exists, commonly a single character;
+            any substring matcher short enough to name one also matches every real message in the
+            conversation. Only an exact comparison separates a probe from a turn.
+        messagesContain:
+          type: string
+          description: Substring of any message in the conversation, case-insensitive.
+        toolOffered:
+          type: string
+          description: The request's `tools` array offers this tool name.
+
+    Outcome:
+      description: Exactly one of the three.
+      oneOf:
+        - type: object
+          required: [text]
+          additionalProperties: false
+          properties:
+            text:
+              type: string
+              description: |
+                Assistant text. Wrapped as `{"content": ...}` automatically when the prompt asks
+                for that shape, because a compliant model would obey the instruction — otherwise
+                specs would exercise Athena's fallback parse while a real model exercises the
+                primary one.
+        - type: object
+          required: [toolCall]
+          additionalProperties: false
+          properties:
+            toolCall:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                arguments: { type: object }
+        - type: object
+          required: [error]
+          additionalProperties: false
+          properties:
+            error:
+              type: object
+              additionalProperties: false
+              properties:
+                message: { type: string }
