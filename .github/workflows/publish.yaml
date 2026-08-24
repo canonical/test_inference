@@ -21,7 +21,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Verify release tag
-        run: test "v$(node -p \"require('./package.json').version\")" = "$GITHUB_REF_NAME"
+        run: node -e "if ('v' + require('./package.json').version !== process.env.GITHUB_REF_NAME) process.exit(1)"
       - run: npm run check
       - run: npm test
       - run: npm run test:package
