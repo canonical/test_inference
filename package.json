@@ -38,6 +38,7 @@
     "postbuild": "node -e \"require('node:fs').chmodSync('dist/server.js', 0o755)\"",
     "build:test": "npm exec -- tsc --project ./tsconfig.test.json",
     "check": "npm exec -- tsc --noEmit --project ./tsconfig.test.json",
+    "prepare": "npm run build",
     "prepack": "npm run clean && npm run build",
     "start": "node ./dist/server.js",
     "test": "npm run build && npm run build:test && node --test ./dist-test/test/*.test.js",
