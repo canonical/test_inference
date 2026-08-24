@@ -25,7 +25,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "test-inference": "./dist/server.js"
+    "test-inference": "dist/server.js"
   },
   "files": [
     "dist",
