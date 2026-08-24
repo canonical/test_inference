@@ -56,7 +56,7 @@ requiring it would be ceremony.
 ## Install
 
 ```
-npm install --save-dev @athena/test-inference
+npm install --save-dev @canonical/test-inference
 ```
 
 When working from source, install dependencies and compile it first:
@@ -87,7 +87,7 @@ test-inference:
   ports:
     - "127.0.0.1:${TEST_INFERENCE_HOST_PORT:-8099}:8080"
   volumes:
-    - ./node_modules/@athena/test-inference:/srv:ro
+    - ./node_modules/@canonical/test-inference:/srv:ro
   healthcheck:
     test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8080/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
     interval: 10s
@@ -118,7 +118,7 @@ provider, with the base URL of this service and *any non-empty* API key:
 **2. Register what the model should do,** from your test:
 
 ```ts
-import { callsTool, createScenarioClient, replies } from "@athena/test-inference";
+import { callsTool, createScenarioClient, replies } from "@canonical/test-inference";
 
 // The address *your test* uses, which is not always the one your application uses.
 const inference = createScenarioClient(`http://localhost:8099`);
@@ -421,7 +421,7 @@ public client API, starts the installed `test-inference` executable, and checks 
 ## Publishing
 
 Releases are published as public npm packages by `.github/workflows/publish.yaml`. Before the first
-release, configure npm trusted publishing for package `@athena/test-inference`, repository
+release, configure npm trusted publishing for package `@canonical/test-inference`, repository
 `canonical/test_inference`, and workflow
 `publish.yaml`. Then push a `v1.0.0` tag and publish the matching GitHub release. The workflow rejects
 a release whose tag does not match `package.json`, runs all checks and package smoke tests, and
@@ -447,8 +447,8 @@ publishes with npm provenance.
 
 Athena is this package's first consumer, and its wiring is a worked example of everything above.
 The test inference service lives in its own repository and is published to npm.
-Athena keeps `"@athena/test-inference": "1.0.0"` as a development dependency, and specs
-`import … from "@athena/test-inference"` like any other dependency. Nothing imports it by path.
+Athena keeps `"@canonical/test-inference": "1.0.0"` as a development dependency, and specs
+`import … from "@canonical/test-inference"` like any other dependency. Nothing imports it by path.
 
 - **Compose.** The `test-inference` service in `compose.yaml` runs the dependency installed in
   Athena's image; `athena` waits on its health check, and

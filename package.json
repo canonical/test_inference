@@ -1,5 +1,5 @@
 {
-  "name": "@athena/test-inference",
+  "name": "@canonical/test-inference",
   "version": "1.0.0",
   "description": "Deterministic OpenAI-compatible inference service for end-to-end test stacks.",
   "license": "Apache-2.0",

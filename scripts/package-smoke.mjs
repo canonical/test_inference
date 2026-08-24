@@ -16,7 +16,7 @@ const installation = join(temporaryDirectory, `installation`);
 execFileSync(`npm`, [`init`, `--yes`], { cwd: temporaryDirectory, stdio: `ignore` });
 execFileSync(`npm`, [`install`, `--ignore-scripts`, `--prefix`, installation, tarball], { stdio: `inherit` });
 
-const installedPackage = join(installation, `node_modules`, `@athena`, `test-inference`);
+const installedPackage = join(installation, `node_modules`, `@canonical`, `test-inference`);
 const imported = await import(join(installedPackage, `dist`, `client.js`));
 
 if (typeof imported.createScenarioClient !== `function`) {
