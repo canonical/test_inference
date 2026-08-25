@@ -1,17 +1,17 @@
-import type { ChatMessage, InferenceMatcher, InferenceOutcome, InferenceScenario } from "./types.js";
+import type { ChatMessage, InferenceOutcome, InferenceScenario } from "./types.js";
 import { isPlainObject } from "./types.js";
 import { readMessageText } from "./util.js";
 
 type ScenarioEntry = { scenario: InferenceScenario; expiresAt: number };
-type ScenarioContext = { model: string; messages: ChatMessage[]; toolNames: Set<string> };
-type ResolvedOutcome = { outcome: InferenceOutcome; source: string };
+type ScenarioContext = { messages: ChatMessage[] };
+type ResolvedOutcome = { outcome: InferenceOutcome; prompt: string; index: number; source: string };
 
 const scenarios = new Map<string, ScenarioEntry>();
 const scenarioTtlMs = 10 * 60 * 1000;
 
-const matcherKeys = new Set<keyof InferenceMatcher>([`model`, `lastMessageRole`, `userMessageEquals`, `messagesContain`, `toolOffered`]);
 const outcomeKeys = new Set([`text`, `toolCall`, `error`]);
 const errorKeys = new Set([`message`]);
+const toolCallKeys = new Set([`name`, `arguments`]);
 
 /** Validates on write so a typo in a spec fails loudly instead of silently never matching. */
 export const validateScenario = (scenario: unknown): string | null => {
@@ -19,37 +19,22 @@ export const validateScenario = (scenario: unknown): string | null => {
     return `Scenario must be an object.`;
   }
 
-  const exchanges = scenario.exchanges ?? [];
-
-  if (!Array.isArray(exchanges)) {
-    return `exchanges must be an array.`;
-  }
-
-  for (const [index, exchange] of exchanges.entries()) {
-    if (!isPlainObject(exchange)) {
-      return `exchanges[${index}] must be an object.`;
+  for (const [prompt, outcomes] of Object.entries(scenario)) {
+    if (!Array.isArray(outcomes) || outcomes.length === 0) {
+      return `Scenario response chain for ${JSON.stringify(prompt)} must be a non-empty array.`;
     }
 
-    const when = exchange.when;
+    for (const [index, outcome] of outcomes.entries()) {
+      const outcomeError = validateOutcome(outcome, `Scenario response chain for ${JSON.stringify(prompt)}[${index}]`);
 
-    if (when !== undefined && !isPlainObject(when)) {
-      return `exchanges[${index}].when must be an object.`;
-    }
-
-    for (const key of Object.keys(when ?? {})) {
-      if (!matcherKeys.has(key as keyof InferenceMatcher)) {
-        return `exchanges[${index}].when has unknown matcher "${key}". Known: ${[...matcherKeys].join(`, `)}.`;
+      if (outcomeError) {
+        return outcomeError;
       }
-    }
 
-    const outcomeError = validateOutcome(exchange.outcome, `exchanges[${index}].outcome`);
-
-    if (outcomeError) {
-      return outcomeError;
     }
   }
 
-  return scenario.default === undefined ? null : validateOutcome(scenario.default, `default`);
+  return null;
 };
 
 const validateOutcome = (outcome: unknown, label: string): string | null => {
@@ -75,6 +60,16 @@ const validateOutcome = (outcome: unknown, label: string): string | null => {
   if (`toolCall` in outcome) {
     if (!isPlainObject(outcome.toolCall) || typeof outcome.toolCall.name !== `string`) {
       return `${label}.toolCall.name is required.`;
+    }
+
+    const unknownToolCall = Object.keys(outcome.toolCall).find((key) => !toolCallKeys.has(key));
+
+    if (unknownToolCall) {
+      return `${label}.toolCall has unknown key "${unknownToolCall}". Known: ${[...toolCallKeys].join(`, `)}.`;
+    }
+
+    if (outcome.toolCall.arguments !== undefined && !isPlainObject(outcome.toolCall.arguments)) {
+      return `${label}.toolCall.arguments must be an object.`;
     }
   }
 
@@ -119,56 +114,32 @@ export const getScenario = (scope: string): InferenceScenario | null => {
   return entry.scenario;
 };
 
-const lastUserMessage = (messages: ChatMessage[]): ChatMessage | undefined => {
+const findPrompt = (scenario: InferenceScenario, messages: ChatMessage[]): { prompt: string; messageIndex: number } | null => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
 
-    if (message?.role === `user`) {
-      return message;
+    if (message?.role === `user` && Object.hasOwn(scenario, readMessageText(message))) {
+      return { prompt: readMessageText(message), messageIndex: index };
     }
   }
 
-  return undefined;
-};
-
-const matches = (when: InferenceMatcher | undefined, context: ScenarioContext): boolean => {
-  if (!when) {
-    return true;
-  }
-
-  if (when.model && context.model !== when.model) {
-    return false;
-  }
-
-  if (when.userMessageEquals !== undefined) {
-    const userMessage = lastUserMessage(context.messages);
-
-    if (!userMessage || readMessageText(userMessage) !== when.userMessageEquals) {
-      return false;
-    }
-  }
-
-  if (when.lastMessageRole && context.messages.at(-1)?.role !== when.lastMessageRole) {
-    return false;
-  }
-
-  if (when.messagesContain && !context.messages.some((message) => readMessageText(message).toLowerCase().includes(when.messagesContain?.toLowerCase() ?? ``))) {
-    return false;
-  }
-
-  if (when.toolOffered && !context.toolNames.has(when.toolOffered)) {
-    return false;
-  }
-
-  return true;
+  return null;
 };
 
 export const resolveOutcome = (scenario: InferenceScenario, context: ScenarioContext): ResolvedOutcome | null => {
-  for (const [index, exchange] of (scenario.exchanges ?? []).entries()) {
-    if (matches(exchange.when, context)) {
-      return { outcome: exchange.outcome, source: `exchange[${index}]` };
-    }
+  const match = findPrompt(scenario, context.messages);
+
+  if (!match) {
+    return null;
   }
 
-  return scenario.default ? { outcome: scenario.default, source: `default` } : null;
+  const outcomes = scenario[match.prompt];
+
+  if (!outcomes) {
+    return null;
+  }
+
+  const index = context.messages.slice(match.messageIndex + 1).filter((message) => message.role === `assistant`).length;
+  const outcome = outcomes[index];
+  return outcome ? { outcome, prompt: match.prompt, index, source: `prompt=${JSON.stringify(match.prompt)} response[${index}]` } : null;
 };

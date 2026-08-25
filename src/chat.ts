@@ -2,7 +2,7 @@ import type { ServerResponse } from "node:http";
 import { logRequest, respond, respondError } from "./http.js";
 import { findChatModel } from "./models.js";
 import { getScenario, resolveOutcome } from "./scenarios.js";
-import type { ChatMessage, ChatTool, JsonObject } from "./types.js";
+import type { ChatMessage } from "./types.js";
 import { isPlainObject } from "./types.js";
 import { estimateTokens, hashToken, readMessageText } from "./util.js";
 
@@ -11,7 +11,7 @@ const shapeAssistantText = (messages: ChatMessage[], text: string): string => {
   return wantsJsonContent ? JSON.stringify({ content: text }) : text;
 };
 
-const describeRequest = (model: string, messages: ChatMessage[]): string => `model=${model} lastMessageRole=${messages.at(-1)?.role ?? `(none)`} messages=${messages.length}`;
+const describeRequest = (model: string, messages: ChatMessage[]): string => `model=${model} finalRole=${messages.at(-1)?.role ?? `(none)`} messages=${messages.length}`;
 
 export const handleChatCompletion = (body: unknown, response: ServerResponse, scope: string): void => {
   if (!isPlainObject(body)) {
@@ -31,19 +31,15 @@ export const handleChatCompletion = (body: unknown, response: ServerResponse, sc
     return respondError(response, 501, `No scenario registered for scope "${scope}". This service has no default behavior — register one with PUT /_mock/scenarios/${encodeURIComponent(scope)} before the request that needs it.`);
   }
 
-  const messages = (Array.isArray(body.messages) ? body.messages : []).filter(isPlainObject).map((message) => ({
+  const messages = (Array.isArray(body.messages) ? body.messages : []).filter(isPlainObject).map((message): ChatMessage => ({
     role: typeof message.role === `string` ? message.role : ``,
     content: typeof message.content === `string` || message.content === null ? message.content : ``,
-  })) as ChatMessage[];
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const toolNames = new Set(
-    tools.filter(isPlainObject).map((tool) => (isPlainObject(tool.function) ? tool.function.name : undefined)).filter((name): name is string => typeof name === `string`),
-  );
-  const resolved = resolveOutcome(scenario, { model, messages, toolNames });
+  }));
+  const resolved = resolveOutcome(scenario, { messages });
 
   if (!resolved) {
     logRequest(`chat`, { scope, model, match: `unmatched` });
-    return respondError(response, 501, `Scenario for scope "${scope}" has no exchange matching this request and no default outcome (${describeRequest(model, messages)}).`);
+    return respondError(response, 501, `Scenario for scope "${scope}" has no exact prompt response consistent with this request (${describeRequest(model, messages)}).`);
   }
 
   const { outcome, source } = resolved;

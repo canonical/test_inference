@@ -46,7 +46,7 @@ export const authorize = (request: IncomingMessage): Authorization => {
   return { ok: true, scope: token };
 };
 
-/** "Why didn't my tool get called?" is the first question when a spec fails; this answers it. */
+/** Keep request decisions visible when a spec fails. */
 export const logRequest = (kind: string, fields: Record<string, unknown>): void => {
   const rendered = Object.entries(fields)
     .map(([key, value]) => `${key}=${value}`)

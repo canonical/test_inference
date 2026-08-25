@@ -19,11 +19,11 @@ info:
     There are no counters, no ordering between requests, and no dependence on a clock — the
     scenario TTL governs eviction only, never a response body.
 
-    Chat completions have no behavior of their own: an unconfigured scope, or a request no
-    exchange matches, is a `501`. `/v1/models` and `/v1/embeddings` need no scenario, because
-    neither decides anything.
+    Chat completions have no behavior of their own: an unconfigured scope, or a request with no
+    exactly registered prompt, is a `501`. `/v1/models` and `/v1/embeddings` need no scenario,
+    because neither decides anything.
 
-    See `README.md` for matcher semantics and what in Athena calls each endpoint.
+    See `README.md` for prompt and response-chain semantics.
 
 servers:
   - url: http://test-inference:8080
@@ -72,8 +72,8 @@ paths:
         cannot be configured through the UI at all, because `ProviderSettings` offers only
         models this endpoint advertises.
 
-        Model *names* are therefore global. Model *behavior* is not — a spec declares that in
-        its own scenario, keyed on `model`.
+        Model *names* are therefore global. Chat behavior is scoped independently through exact
+        prompt scenarios.
       responses:
         "200":
           description: The advertised catalog.
@@ -90,11 +90,9 @@ paths:
       summary: Create a chat completion
       description: |
         Answers from the scenario registered for the request's scope, and from nowhere else.
-        Six call sites in Athena reach this endpoint; see `README.md`.
-
-        Note that Athena's task iterator appends a synthetic `user` message to every request, so
-        `lastMessageRole` is always `user` and `userMessageEquals` sees only that boilerplate.
-        Match a task loop with `messagesContain` and `toolOffered` — see `README.md`.
+        The newest user message that exactly equals a registered prompt selects an ordered chain
+        of assistant responses. The number of later assistant messages in request history selects
+        the next response, making retries deterministic without server-side counters.
       requestBody:
         required: true
         content:
@@ -119,9 +117,9 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "501":
           description: |
-            No scenario is registered for the request's scope, or none of its exchanges matched
-            and it declares no `default`. The message names the scope and describes the request
-            that found no match.
+            No scenario is registered for the request's scope, no user message exactly matches a
+            registered prompt, or its configured response chain is exhausted. The message names
+            the scope and describes the request that found no response.
 
             `501` rather than `404` because `providerValidateModels` reads **only 404** as
             "model unavailable"; and outside `fetchWithRetry`'s retryable set (429/502/503/504),
@@ -217,11 +215,10 @@ paths:
                   stored: { const: true }
         "400":
           description: |
-            Invalid scenario, or a `scope` that is not valid percent-encoded text. Unknown
-            matcher or outcome keys are rejected here, with a message naming the valid ones, so a
-            typo in a spec fails loudly instead of silently never matching. So are an outcome key
-            with an empty value and unknown `error` keys such as `status`; configured failures
-            always return `502`.
+            Invalid scenario, or a `scope` that is not valid percent-encoded text. Empty response
+            chains, malformed outcomes, and unknown outcome keys are rejected here so a typo in a
+            spec fails loudly. Unknown `error` keys such as `status` are also rejected; configured
+            failures always return `502`.
           content:
             application/json:
               schema:
@@ -313,9 +310,8 @@ components:
         tools:
           type: array
           description: |
-            Offered tools, matchable with `toolOffered`. That matcher is how a spec asserts the
-            enablement path — a `toolCall` outcome otherwise fires whether or not the loop
-            offered the tool it names.
+            Optional OpenAI-compatible function definitions supplied by the application. They
+            are accepted but have no scenario semantics.
           items:
             type: object
             properties:
@@ -414,53 +410,15 @@ components:
 
     Scenario:
       type: object
+      additionalProperties:
+        type: array
+        minItems: 1
+        items: { $ref: "#/components/schemas/Outcome" }
       description: |
-        First matching exchange wins; `default` answers anything matching none. Absent both, the
-        request is a `501` — declare a `default` for requests the spec does not care about.
-      properties:
-        exchanges:
-          type: array
-          items:
-            type: object
-            required: [outcome]
-            properties:
-              when: { $ref: "#/components/schemas/Matcher" }
-              outcome: { $ref: "#/components/schemas/Outcome" }
-        default: { $ref: "#/components/schemas/Outcome" }
-
-    Matcher:
-      type: object
-      additionalProperties: false
-      description: |
-        All optional; every supplied matcher must pass. An absent `when` always matches.
-
-        There is deliberately no call-ordinal matcher: `fetchWithRetry` retries a completion up
-        to four times, so any counter-based scheme would have retries silently consume slots. The
-        conversation is the sequence — the message history grows every turn.
-      properties:
-        model:
-          type: string
-          description: |
-            The only thing distinguishing model-validation requests, which send an identical
-            one-character prompt for every model.
-        lastMessageRole:
-          type: string
-          enum: [user, assistant, tool]
-        userMessageEquals:
-          type: string
-          description: |
-            The most recent user message, matched exactly — case-sensitive and untrimmed.
-
-            Exact on purpose, with no substring form offered. The request it exists for is the
-            probe an application sends to check that a model exists, commonly a single character;
-            any substring matcher short enough to name one also matches every real message in the
-            conversation. Only an exact comparison separates a probe from a turn.
-        messagesContain:
-          type: string
-          description: Substring of any message in the conversation, case-insensitive.
-        toolOffered:
-          type: string
-          description: The request's `tools` array offers this tool name.
+        A dictionary from complete user-message text to a non-empty ordered sequence of assistant
+        responses. Prompt keys are matched exactly, case-sensitively, and without trimming;
+        property order has no effect. Each assistant message after the matched prompt advances one
+        position in the sequence. Other message roles have no effect on progression.
 
     Outcome:
       description: Exactly one of the three.
@@ -483,6 +441,7 @@ components:
             toolCall:
               type: object
               required: [name]
+              additionalProperties: false
               properties:
                 name: { type: string }
                 arguments: { type: object }

@@ -16,7 +16,7 @@ describe(`server`, () => {
   it(`exposes the scenario client with caller-selected scopes`, async () => {
     const client = createScenarioClient(service.base);
     const scope = nextScope(`client`);
-    await client.register(scope, { default: { text: `client` } });
+    await client.register(scope, { hello: [{ text: `client` }] });
     assert.equal((await postChat(service.base, scope, chatRequest())).status, 200);
     await client.remove(scope);
     assert.equal((await postChat(service.base, scope, chatRequest())).status, 501);
@@ -37,11 +37,13 @@ describe(`server`, () => {
     const body = await response.json() as { data: Array<{ id: string }> };
     assert.ok(body.data.some(({ id }) => id === `deterministic-chat`));
     assert.ok(body.data.some(({ id }) => id === `deterministic-embed-1536`));
+    assert.ok(!body.data.some(({ id }) => id === `deterministic-embed-8`));
+    assert.ok(!body.data.some(({ id }) => id === `deterministic-embed-16`));
   });
 
   it(`serves the documented inference routes`, async () => {
     assert.equal((await fetch(`${service.base}/v1/models`, { headers: { authorization: `Bearer routes` } })).status, 200);
-    assert.notEqual((await fetch(`${service.base}/v1/embeddings`, { method: `POST`, headers: { authorization: `Bearer routes`, "content-type": `application/json` }, body: JSON.stringify({ model: `deterministic-embed-8`, input: `x` }) })).status, 404);
+    assert.notEqual((await fetch(`${service.base}/v1/embeddings`, { method: `POST`, headers: { authorization: `Bearer routes`, "content-type": `application/json` }, body: JSON.stringify({ model: `deterministic-embed-1536`, input: `x` }) })).status, 404);
     assert.notEqual((await postChat(service.base, `routes`, chatRequest())).status, 404);
   });
 
@@ -59,26 +61,26 @@ describe(`server`, () => {
   });
 
   it(`rejects invalid scenarios at the control boundary`, async () => {
-    const result = await registerScenario(service.base, `invalid-scenario`, { default: { text: null } });
+    const result = await registerScenario(service.base, `invalid-scenario`, { hello: [{ text: null }] });
     assert.equal(result.status, 400);
     assert.match(String((result.body.error as { message: string }).message), /string/);
   });
 
   it(`replaces an existing caller-selected scope`, async () => {
     const scope = nextScope(`replace-http`);
-    await registerScenario(service.base, scope, { default: { text: `first` } });
-    await registerScenario(service.base, scope, { default: { text: `second` } });
+    await registerScenario(service.base, scope, { hello: [{ text: `first` }] });
+    await registerScenario(service.base, scope, { hello: [{ text: `second` }] });
     const result = await postChat(service.base, scope, chatRequest());
     assert.equal((result.body.choices as Array<{ message: { content: string } }>)[0]?.message.content, `second`);
   });
 
   it(`does not require credentials on the scenario control API`, async () => {
-    assert.equal((await registerScenario(service.base, nextScope(`control`), { default: { text: `ok` } })).status, 200);
+    assert.equal((await registerScenario(service.base, nextScope(`control`), { hello: [{ text: `ok` }] })).status, 200);
   });
 
   it(`contains an unexpected serialization failure and keeps listening`, async () => {
     const scope = nextScope(`fatal`);
-    putScenario(scope, { default: { text: 1n as unknown as string } });
+    putScenario(scope, { hello: [{ text: 1n as unknown as string }] });
     assert.equal((await postChat(service.base, scope, chatRequest())).status, 500);
     assert.equal((await fetch(`${service.base}/health`)).status, 200);
   });
