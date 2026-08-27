@@ -41,17 +41,11 @@ const apiKey = crypto.randomUUID();
 const inference = createScenarioClient("http://localhost:8080");
 
 await inference.register(apiKey, {
-  exchanges: [
-    {
-      when: { messagesContain: "Fix login" },
-      outcome: replies("Done."),
-    },
-    {
-      when: { toolOffered: "define_title" },
-      outcome: callsTool("define_title", { title: "Fix login" }),
-    },
+  "Fix login": [
+    callsTool("define_title", { title: "Fix login" }),
+    replies("Done."),
   ],
-  default: replies("Nothing to do."),
+  "Summarize changes": [replies("Updated login handling.")],
 });
 ```
 
@@ -62,21 +56,16 @@ existing scenario for that key. Scenarios expire after ten minutes and can be re
 await inference.remove(apiKey);
 ```
 
-### Matchers
+### Prompt matching
 
-All fields in `when` must match. An omitted `when` matches every request. Exchanges are checked in
-order and the first match wins.
+Each scenario key is a complete user message. Matching is exact, case-sensitive, and untrimmed;
+dictionary order has no effect. If no user message in the request history exactly matches a
+registered key, the request returns `501`.
 
-| Matcher | Matches when |
-| --- | --- |
-| `model` | The request uses the given model |
-| `lastMessageRole` | The final message has the given role |
-| `userMessageEquals` | The latest user message exactly equals the value |
-| `messagesContain` | Any message contains the value, case-insensitively |
-| `toolOffered` | The request offers the named tool |
-
-For multi-turn tool loops, put the later, more specific exchange first because earlier messages
-remain in the conversation history.
+Each value is a non-empty sequence of assistant responses. A single response handles an ordinary
+completion. For a sequence, each assistant message added to later request history advances to the
+next configured response. Progress is therefore stateless and generic: retrying unchanged history
+returns the same response regardless of its OpenAI assistant-message shape.
 
 ### Outcomes
 
@@ -85,8 +74,6 @@ remain in the conversation history.
 | `replies(text)` | Returns assistant text |
 | `callsTool(name, arguments)` | Returns an assistant tool call |
 | `fails(message?)` | Returns `502 Bad Gateway` |
-
-`default` is optional. Without it, an unmatched request returns `501`.
 
 ## Endpoints
 
@@ -104,13 +91,12 @@ do not require authentication.
 Available models:
 
 - `deterministic-chat`
-- `deterministic-embed-8`
-- `deterministic-embed-16`
 - `deterministic-embed-1536`
 
-Any `deterministic-embed-<dimensions>` model up to 4096 dimensions is also accepted. Embeddings
-are stable for identical input; response entries may be out of order and should be associated
-using their `index` field.
+For focused fixtures, an explicit `deterministic-embed-<dimensions>` model from 1 through 4096 is
+also accepted, but custom widths are not advertised by the model list. Embeddings are stable for
+identical input; response entries may be out of order and should be associated using their
+`index` field.
 
 ## Development
 

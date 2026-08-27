@@ -44,7 +44,7 @@ const handleScenarioRoute = async (request: IncomingMessage, response: ServerRes
 
   const scenario = body as InferenceScenario;
   putScenario(scope, scenario);
-  logRequest(`scenario`, { scope, exchanges: scenario.exchanges?.length ?? 0 });
+  logRequest(`scenario`, { scope, prompts: Object.keys(scenario).length });
   return respond(response, 200, { scope, stored: true });
 };
 

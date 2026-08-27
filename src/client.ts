@@ -2,7 +2,7 @@ import type { InferenceOutcome, InferenceScenario, ScenarioClient } from "./type
 
 const scenarioUrl = (baseUrl: string, scope: string): string => `${String(baseUrl).replace(/\/+$/u, ``)}/_mock/scenarios/${encodeURIComponent(scope)}`;
 
-export type { InferenceExchange, InferenceMatcher, InferenceOutcome, InferenceScenario, ScenarioClient } from "./types.js";
+export type { InferenceOutcome, InferenceScenario, ScenarioClient } from "./types.js";
 
 export const replies = (text: string): InferenceOutcome => ({ text });
 

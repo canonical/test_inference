@@ -8,7 +8,7 @@ export const findChatModel = (id: string): (typeof chatModelCatalog)[number] | u
 /** Dimension is read from the name, so a spec can exercise widths without new advertisements. */
 export const embeddingModelPattern = /^deterministic-embed-(\d+)$/u;
 
-const advertisedEmbeddingModels = [`deterministic-embed-8`, `deterministic-embed-16`, `deterministic-embed-1536`];
+const advertisedEmbeddingModels = [`deterministic-embed-1536`];
 
 export const handleModelList = (response: ServerResponse): void =>
   respond(response, 200, {
